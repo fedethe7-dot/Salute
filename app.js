@@ -2,7 +2,7 @@
    Cartella Salute — App
    ========================================================= */
 'use strict';
-const VERSIONE = '1.1.0';
+const VERSIONE = '1.2.0';
 /* FONTI e LIVELLI arrivano da refs.js */
 
 /* ---------- Utilità ---------- */
@@ -639,7 +639,8 @@ VISTE.misure = async () => {
   }
   h += `</div>`;
   h += `<button class="btn" data-act="nuovaMisura" data-tipo="${T.id}">＋ Nuova misura ${esc(T.nome.toLowerCase())}</button>`;
-  if (T.id === 'pressione') h += `<button class="btn sec mt" data-act="importa">📥 Importa dal misuratore (CSV)</button>`;
+  if (T.id === 'pressione' || T.id === 'peso') h += `<button class="btn sec mt" data-act="importa">📥 Importa ${T.id === 'peso' ? 'dalla bilancia' : 'dal misuratore'} (CSV)</button>`;
+  if (T.id === 'peso') h += composizioneHTML(lista);
   h += `<div class="sec-t">Storico <span>${lista.length}</span></div><div class="card"><div class="list">` +
     (lista.length ? lista.map(m => {
       const c = T.classifica(m.v, m.contesto, S.profilo);
@@ -649,6 +650,21 @@ VISTE.misure = async () => {
     }).join('') : `<div class="empty small">—</div>`) + `</div></div>`;
   return h;
 };
+function composizioneHTML(lista) {
+  const con = lista.filter(m => COMPOSIZIONE.some(([k]) => isFinite(m.v[k])));
+  if (!con.length) return '';
+  const u = con[0], p = con[1];
+  const righe = COMPOSIZIONE.filter(([k]) => isFinite(u.v[k])).map(([k, nome, un]) => {
+    const d = p && isFinite(p.v[k]) ? u.v[k] - p.v[k] : null;
+    return `<tr><td>${nome}</td><td><b>${fmtN(u.v[k], k === 'bmr' || k === 'viscerale' ? 0 : 1)}</b> <span class="small muted">${un}</span></td>
+      <td class="small muted">${d === null || Math.abs(d) < 0.05 ? (d === null ? '' : '=') : (d > 0 ? '▲ ' : '▼ ') + fmtN(Math.abs(d), k === 'bmr' ? 0 : 1)}</td></tr>`;
+  }).join('');
+  const gr = con.filter(m => isFinite(m.v.grasso));
+  return `<div class="sec-t">Composizione corporea <span>${fmtD(u.data)}</span></div><div class="card">
+    <table class="tbl"><tr><th></th><th>Ultima</th><th>${p ? 'vs ' + fmtDb(p.data) : ''}</th></tr>${righe}</table>
+    ${gr.length > 1 ? `<div class="card-sub mt">Grasso corporeo nel tempo (%)</div>${grafico({ serie: [{ colore: '#f6ad55', punti: gr.map(m => ({ x: parseD(m.data).getTime(), y: m.v.grasso })) }], h: 130 })}` : ''}
+    <p class="hint">🤖 Valori stimati dalla bilancia (bioimpedenza): utili per vedere l'andamento nel tempo, meno precisi come numero assoluto. Possono variare con acqua bevuta, ora del giorno e pasti: pesati sempre in condizioni simili.</p></div>`;
+}
 VISTE_DOPO.misure = v => {
   const d = $('#p-dal', v), a = $('#p-al', v);
   if (d) { d.onchange = () => { S.dal = d.value; render(); }; a.onchange = () => { S.al = a.value; render(); }; }
@@ -731,7 +747,7 @@ VISTE.altro = async () => {
     ['documenti', '📁', 'Tutti i documenti', `${S.d.documenti.length} file`],
     ['act:riepilogo', '📄', 'PDF di riepilogo', 'Scegli cosa includere e stampalo o salvalo'],
     ['act:backup', '💾', 'Backup e ripristino', lastBk ? `Ultimo: ${fmtD(lastBk)}` : 'Mai fatto'],
-    ['act:importa', '📥', 'Importa dal misuratore', 'File CSV del misuratore di pressione'],
+    ['act:importa', '📥', 'Importa da misuratore o bilancia', 'File CSV della pressione o del peso (es. RENPHO)'],
     ['act:csv', '📊', 'Esporta misure in CSV', 'Si apre anche con Excel o Fogli'],
     ['act:profilo', '👤', 'Profilo', S.profilo ? `${S.profilo.nome}${S.profilo.anno ? ' · ' + S.profilo.anno : ''}` : ''],
     ['act:temi', '🎨', 'Tema', 'Turchese, Viola, Notte, Chiaro'],
@@ -1502,27 +1518,68 @@ function dataDaCSV(s) {
   if (m) return `${m[3]}-${pad(+m[2])}-${pad(+m[1])}T12:00`;
   return '';
 }
+/* Composizione corporea dalla bilancia: chiave, etichetta, unità, possibili nomi di colonna */
+const COMPOSIZIONE = [
+  ['grasso', 'Grasso corporeo', '%', /^(percentuale di grasso corporeo|body fat|grasso corporeo|fat)/],
+  ['muscoli', 'Massa muscolare', 'kg', /^(massa muscolare\(|muscle mass)/],
+  ['acqua', 'Acqua corporea', '%', /^(percentuale di acqua corporea|body water|water)/],
+  ['viscerale', 'Grasso viscerale', '', /^(grasso viscerale|visceral)/],
+  ['ossa', 'Massa ossea', 'kg', /^(massa ossea|bone mass)/],
+  ['bmr', 'Metabolismo basale', 'kcal', /^(bmr|metabolismo basale)/]
+];
 function misureDaCSV(testo, esistenti) {
-  const R = parseCSV(testo); if (R.length < 2) return { nuove: [], doppie: 0, scartate: 0 };
+  const R = parseCSV(testo); if (R.length < 2) return { tipo: null, nuove: [], doppie: 0, scartate: 0 };
   const h = R[0].map(norm);
   const col = re => h.findIndex(x => re.test(x));
-  const cS = col(/sys|sistol|max/), cD = col(/dia|min/), cP = col(/pulse|bpm|puls|fc|freq|heart/), cT = col(/time|data|date|ora/), cN = col(/note/);
-  if (cS < 0 || cD < 0 || cT < 0) throw new Error('Non trovo le colonne di data, sistolica e diastolica');
-  const vicino = (a, b) => a.v.sis === b.v.sis && a.v.dia === b.v.dia && Math.abs(parseD(a.data) - parseD(b.data)) <= 5 * 60000;
+  const cDate = col(/^(data|date|giorno)\b/), cTime = col(/^(tempo|ora|time|orario)\b/), cN = col(/^(note|osservazioni)/);
+  if (cDate < 0 && cTime < 0) throw new Error('Non trovo la colonna con la data');
+  const quando = r => dataDaCSV(cDate >= 0 && cTime >= 0 && cDate !== cTime ? `${r[cDate]} ${r[cTime]}` : r[cDate >= 0 ? cDate : cTime]);
+  const cS = col(/^(sys|systol|sistol)/), cD = col(/^(dia|diastol)/);
+  const cKg = col(/^(peso|weight)(\s*\(kg\))?$/);
   const nuove = []; let doppie = 0, scartate = 0;
+  let tipo, vicino, leggi;
+  if (cS >= 0 && cD >= 0) {
+    tipo = 'pressione';
+    const cP = col(/^(pulse|bpm|polso|battito|fc|freq|heart)/);
+    vicino = (a, b) => a.v.sis === b.v.sis && a.v.dia === b.v.dia && Math.abs(parseD(a.data) - parseD(b.data)) <= 5 * 60000;
+    leggi = r => {
+      const sis = num(r[cS]), dia = num(r[cD]), fc = cP >= 0 ? num(r[cP]) : NaN;
+      if (!isFinite(sis) || !isFinite(dia) || sis < 50 || sis > 260 || dia < 30 || dia > 160 || sis <= dia) return null;
+      return { v: { sis, dia, ...(isFinite(fc) && fc > 0 ? { fc } : {}) }, contesto: 'casa', origine: 'misuratore' };
+    };
+  } else if (cKg >= 0) {
+    tipo = 'peso';
+    const cc = COMPOSIZIONE.map(([k, , , re]) => [k, col(re)]).filter(([, i]) => i >= 0);
+    // la bilancia salva spesso la stessa pesata più volte di fila: pesate entro 10 minuti (differenza < 1 kg) = una sola, la più completa
+    vicino = (a, b) => Math.abs(a.v.kg - b.v.kg) < 1 && Math.abs(parseD(a.data) - parseD(b.data)) <= 10 * 60000;
+    leggi = r => {
+      const kg = num(r[cKg]);
+      if (!isFinite(kg) || kg < 20 || kg > 300) return null;
+      const v = { kg };
+      for (const [k, i] of cc) { const x = num(r[i]); if (isFinite(x) && x > 0) v[k] = x; }
+      return { v, origine: 'bilancia' };
+    };
+  } else throw new Error('Non riconosco il file: servono le colonne della pressione (sistolica/diastolica) o del peso');
   for (const r of R.slice(1)) {
-    const data = dataDaCSV(r[cT]), sis = num(r[cS]), dia = num(r[cD]), fc = cP >= 0 ? num(r[cP]) : NaN;
-    if (!data || !isFinite(sis) || !isFinite(dia) || sis < 50 || sis > 260 || dia < 30 || dia > 160 || sis <= dia) { scartate++; continue; }
-    const m = { tipo: 'pressione', data, contesto: 'casa', v: { sis, dia, ...(isFinite(fc) && fc > 0 ? { fc } : {}) }, note: cN >= 0 ? (r[cN] || '') : '', origine: 'misuratore' };
-    if (esistenti.some(e => e.tipo === 'pressione' && vicino(e, m)) || nuove.some(n => vicino(n, m))) { doppie++; continue; }
+    const data = quando(r), base = data && leggi(r);
+    if (!base) { scartate++; continue; }
+    const m = { tipo, data, note: cN >= 0 ? (r[cN] || '').replace(/^-+$/, '') : '', ...base };
+    if (esistenti.some(e => e.tipo === tipo && vicino(e, m))) { doppie++; continue; }
+    const gemella = nuove.find(n => vicino(n, m));
+    if (gemella) {
+      doppie++;
+      // tengo la versione più completa (con la composizione corporea)
+      if (Object.keys(m.v).length > Object.keys(gemella.v).length) Object.assign(gemella, m);
+      continue;
+    }
     nuove.push(m);
   }
   nuove.sort((a, b) => b.data.localeCompare(a.data));
-  return { nuove, doppie, scartate };
+  return { tipo, nuove, doppie, scartate };
 }
 function importaMisuratore() {
-  apriSheet(`<h2>📥 Importa dal misuratore</h2>
-    <p class="muted small">Scegli il file CSV esportato dall'app del misuratore. Le misure doppie (salvate due volte o già presenti) vengono saltate.</p>
+  apriSheet(`<h2>📥 Importa da misuratore o bilancia</h2>
+    <p class="muted small">Scegli il file CSV esportato dall'app del misuratore di pressione o della bilancia (es. RENPHO). L'app riconosce da sola il tipo e salta le misure doppie.</p>
     <button class="btn" id="im-file">📂 Scegli il file CSV</button><input type="file" id="im-in" accept=".csv,text/csv,text/plain" hidden>
     <div id="im-res"></div>`, sh => {
     $('#im-file', sh).onclick = () => $('#im-in', sh).click();
@@ -1530,19 +1587,24 @@ function importaMisuratore() {
       const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
       const res = $('#im-res', sh);
       try {
-        const { nuove, doppie, scartate } = misureDaCSV(await f.text(), S.d.misure);
+        const { tipo, nuove, doppie, scartate } = misureDaCSV(await f.text(), S.d.misure);
         if (!nuove.length) { res.innerHTML = `<div class="alert info">Nessuna misura nuova da importare${doppie ? ` (${doppie} già presenti o doppie)` : ''}.</div>`; return; }
-        res.innerHTML = `<div class="sec-t">${nuove.length} misure nuove</div><div class="card"><div class="list">${nuove.map(m => {
-          const c = REFS.classificaPressione(m.v.sis, m.v.dia, 'casa');
-          return `<div class="item"><div class="item-ico ${c.cls}"><span class="dot"></span></div><div class="item-body"><div class="item-t">${m.v.sis}/${m.v.dia}${m.v.fc ? ' · ' + m.v.fc + ' bpm' : ''}</div><div class="item-s">🏠 casa</div></div><div class="item-r">${fmtD(m.data)}<br>${fmtOra(m.data)}</div></div>`;
-        }).join('')}</div></div>
-        ${doppie ? `<p class="small muted">Saltate ${doppie} doppie.</p>` : ''}${scartate ? `<p class="small lv-check">Ignorate ${scartate} righe non valide.</p>` : ''}
-        <div class="f"><span class="lab">Dove sono state misurate?</span><div class="seg" id="im-ctx"><button data-v="casa">🏠 A casa</button><button data-v="ambulatorio">🏥 Dal medico</button></div></div>
+        const pr = tipo === 'pressione';
+        const riga = m => {
+          if (pr) {
+            const c = REFS.classificaPressione(m.v.sis, m.v.dia, 'casa');
+            return `<div class="item"><div class="item-ico ${c.cls}"><span class="dot"></span></div><div class="item-body"><div class="item-t">${m.v.sis}/${m.v.dia}${m.v.fc ? ' · ' + m.v.fc + ' bpm' : ''}</div><div class="item-s">🏠 casa</div></div><div class="item-r">${fmtD(m.data)}<br>${fmtOra(m.data)}</div></div>`;
+          }
+          return `<div class="item"><div class="item-ico">⚖️</div><div class="item-body"><div class="item-t">${fmtN(m.v.kg, 2)} kg</div><div class="item-s">${m.v.grasso ? `grasso ${fmtN(m.v.grasso)}%` : 'solo peso'}${m.v.muscoli ? ` · muscoli ${fmtN(m.v.muscoli)} kg` : ''}</div></div><div class="item-r">${fmtD(m.data)}<br>${fmtOra(m.data)}</div></div>`;
+        };
+        res.innerHTML = `<div class="sec-t">${pr ? '❤️ Pressione' : '⚖️ Peso'} · ${nuove.length} misure nuove</div><div class="card"><div class="list">${nuove.map(riga).join('')}</div></div>
+        ${doppie ? `<p class="small muted">Saltate ${doppie} doppie (salvate più volte di fila o già presenti).</p>` : ''}${scartate ? `<p class="small lv-check">Ignorate ${scartate} righe non valide.</p>` : ''}
+        ${pr ? `<div class="f"><span class="lab">Dove sono state misurate?</span><div class="seg" id="im-ctx"><button data-v="casa">🏠 A casa</button><button data-v="ambulatorio">🏥 Dal medico</button></div></div>` : ''}
         <button class="btn" id="im-ok">Importa ${nuove.length} misure</button>`;
-        let ctx = 'casa'; segmento($('#im-ctx', sh), v => ctx = v, ctx);
+        let ctx = 'casa'; if (pr) segmento($('#im-ctx', sh), v => ctx = v, ctx);
         $('#im-ok', sh).onclick = async () => {
-          for (const m of nuove) { m.contesto = ctx; m.p = S.pid; await DB.salva('misure', m); }
-          S.tipoMisura = 'pressione'; S.periodo = 'tutto';
+          for (const m of nuove) { if (pr) m.contesto = ctx; m.p = S.pid; await DB.salva('misure', m); }
+          S.tipoMisura = tipo; S.periodo = 'tutto'; S.view = 'misure';
           await dopoSalvataggio(`${nuove.length} misure importate ✅`);
         };
       } catch (e) { res.innerHTML = `<div class="alert lv-warn">Non riesco a leggere il file: ${esc(e.message)}</div>`; }

@@ -125,7 +125,7 @@ const TIPI_BASE = [
     campi: [{ k: 'kg', nome: 'Peso', unita: 'kg', min: 20, max: 300, passo: 0.1, obbl: true }],
     principale: 'kg',
     classifica: (v, ctx, profilo) => classificaBMI(+v.kg, +(profilo && profilo.altezza)),
-    formato: v => `${(+v.kg).toFixed(1)} kg`
+    formato: v => `${(Math.round(+v.kg * 100) / 100).toLocaleString("it-IT")} kg`
   },
   {
     id: 'glicemia', nome: 'Glicemia', icona: '🩸', colore: '#f6ad55', nascosto: true,
