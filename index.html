@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Cartella Salute</title>
+  <meta name="description" content="Il tuo archivio personale della salute: visite, esami, pressione, peso e documenti.">
+  <meta name="theme-color" content="#0b1117">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Schermata di sblocco -->
+  <div id="lock" class="lock hidden" aria-live="polite">
+    <div class="lock-box">
+      <div class="lock-logo">🩺</div>
+      <h1 class="lock-title">Cartella Salute</h1>
+      <p id="lock-msg" class="lock-msg">Disegna la sequenza</p>
+      <div id="pattern" class="pattern"></div>
+      <button id="lock-recover" class="btn-link">Ho dimenticato la sequenza</button>
+    </div>
+  </div>
+
+  <!-- App -->
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <div>
+        <div id="top-sub" class="top-sub">Ciao 👋</div>
+        <h1 id="top-title" class="top-title">Cartella Salute</h1>
+      </div>
+      <div class="top-actions">
+        <button class="icon-btn" data-act="cerca" aria-label="Cerca">🔍</button>
+        <button id="profile-chip" class="profile-chip" data-act="profili" aria-label="Profilo">F</button>
+      </div>
+    </header>
+
+    <main id="view" class="view"></main>
+
+    <button class="fab" data-act="nuovo" aria-label="Aggiungi">＋</button>
+
+    <nav class="tabbar">
+      <button data-nav="home" class="tab active"><span>🏠</span>Home</button>
+      <button data-nav="misure" class="tab"><span>📈</span>Misure</button>
+      <button data-nav="visite" class="tab"><span>🩺</span>Visite</button>
+      <button data-nav="esami" class="tab"><span>🧪</span>Esami</button>
+      <button data-nav="altro" class="tab"><span>☰</span>Altro</button>
+    </nav>
+  </div>
+
+  <!-- Foglio a scomparsa per i moduli -->
+  <div id="sheet-bg" class="sheet-bg hidden"></div>
+  <section id="sheet" class="sheet hidden" role="dialog" aria-modal="true"></section>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="refs.js"></script>
+  <script src="db.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
