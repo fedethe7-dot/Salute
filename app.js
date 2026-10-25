@@ -2,7 +2,7 @@
    Cartella Salute — App
    ========================================================= */
 'use strict';
-const VERSIONE = '1.0.0';
+const VERSIONE = '1.1.0';
 /* FONTI e LIVELLI arrivano da refs.js */
 
 /* ---------- Utilità ---------- */
@@ -639,6 +639,7 @@ VISTE.misure = async () => {
   }
   h += `</div>`;
   h += `<button class="btn" data-act="nuovaMisura" data-tipo="${T.id}">＋ Nuova misura ${esc(T.nome.toLowerCase())}</button>`;
+  if (T.id === 'pressione') h += `<button class="btn sec mt" data-act="importa">📥 Importa dal misuratore (CSV)</button>`;
   h += `<div class="sec-t">Storico <span>${lista.length}</span></div><div class="card"><div class="list">` +
     (lista.length ? lista.map(m => {
       const c = T.classifica(m.v, m.contesto, S.profilo);
@@ -730,6 +731,7 @@ VISTE.altro = async () => {
     ['documenti', '📁', 'Tutti i documenti', `${S.d.documenti.length} file`],
     ['act:riepilogo', '📄', 'PDF di riepilogo', 'Scegli cosa includere e stampalo o salvalo'],
     ['act:backup', '💾', 'Backup e ripristino', lastBk ? `Ultimo: ${fmtD(lastBk)}` : 'Mai fatto'],
+    ['act:importa', '📥', 'Importa dal misuratore', 'File CSV del misuratore di pressione'],
     ['act:csv', '📊', 'Esporta misure in CSV', 'Si apre anche con Excel o Fogli'],
     ['act:profilo', '👤', 'Profilo', S.profilo ? `${S.profilo.nome}${S.profilo.anno ? ' · ' + S.profilo.anno : ''}` : ''],
     ['act:temi', '🎨', 'Tema', 'Turchese, Viola, Notte, Chiaro'],
@@ -1479,6 +1481,75 @@ async function ripristina(dati) {
   urlCache.clear();
 }
 
+/* ---------- Import CSV dal misuratore di pressione ----------
+   Riconosce le colonne dal nome (Systolic/Sistolica, Diastolic, Pulse/bpm, Time/Data, Note).
+   Salta i doppioni: stessa misura salvata due volte a pochi minuti di distanza,
+   oppure già presente nell'app. */
+function parseCSV(testo) {
+  const righe = testo.replace(/^﻿/, '').split(/\r?\n/).filter(r => r.trim());
+  if (!righe.length) return [];
+  const sep = (righe[0].match(/;/g) || []).length > (righe[0].match(/,/g) || []).length ? ';' : ',';
+  const split = r => { const out = []; let cur = '', q = false; for (const ch of r) { if (ch === '"') q = !q; else if (ch === sep && !q) { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out.map(x => x.trim()); };
+  return righe.map(split);
+}
+function dataDaCSV(s) {
+  s = String(s || '').trim();
+  let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})[ T]+(\d{1,2}):(\d{2})/);
+  if (m) return `${m[3]}-${pad(+m[2])}-${pad(+m[1])}T${pad(+m[4])}:${m[5]}`;
+  m = s.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})[ T]+(\d{1,2}):(\d{2})/);
+  if (m) return `${m[1]}-${pad(+m[2])}-${pad(+m[3])}T${pad(+m[4])}:${m[5]}`;
+  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+  if (m) return `${m[3]}-${pad(+m[2])}-${pad(+m[1])}T12:00`;
+  return '';
+}
+function misureDaCSV(testo, esistenti) {
+  const R = parseCSV(testo); if (R.length < 2) return { nuove: [], doppie: 0, scartate: 0 };
+  const h = R[0].map(norm);
+  const col = re => h.findIndex(x => re.test(x));
+  const cS = col(/sys|sistol|max/), cD = col(/dia|min/), cP = col(/pulse|bpm|puls|fc|freq|heart/), cT = col(/time|data|date|ora/), cN = col(/note/);
+  if (cS < 0 || cD < 0 || cT < 0) throw new Error('Non trovo le colonne di data, sistolica e diastolica');
+  const vicino = (a, b) => a.v.sis === b.v.sis && a.v.dia === b.v.dia && Math.abs(parseD(a.data) - parseD(b.data)) <= 5 * 60000;
+  const nuove = []; let doppie = 0, scartate = 0;
+  for (const r of R.slice(1)) {
+    const data = dataDaCSV(r[cT]), sis = num(r[cS]), dia = num(r[cD]), fc = cP >= 0 ? num(r[cP]) : NaN;
+    if (!data || !isFinite(sis) || !isFinite(dia) || sis < 50 || sis > 260 || dia < 30 || dia > 160 || sis <= dia) { scartate++; continue; }
+    const m = { tipo: 'pressione', data, contesto: 'casa', v: { sis, dia, ...(isFinite(fc) && fc > 0 ? { fc } : {}) }, note: cN >= 0 ? (r[cN] || '') : '', origine: 'misuratore' };
+    if (esistenti.some(e => e.tipo === 'pressione' && vicino(e, m)) || nuove.some(n => vicino(n, m))) { doppie++; continue; }
+    nuove.push(m);
+  }
+  nuove.sort((a, b) => b.data.localeCompare(a.data));
+  return { nuove, doppie, scartate };
+}
+function importaMisuratore() {
+  apriSheet(`<h2>📥 Importa dal misuratore</h2>
+    <p class="muted small">Scegli il file CSV esportato dall'app del misuratore. Le misure doppie (salvate due volte o già presenti) vengono saltate.</p>
+    <button class="btn" id="im-file">📂 Scegli il file CSV</button><input type="file" id="im-in" accept=".csv,text/csv,text/plain" hidden>
+    <div id="im-res"></div>`, sh => {
+    $('#im-file', sh).onclick = () => $('#im-in', sh).click();
+    $('#im-in', sh).onchange = async ev => {
+      const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
+      const res = $('#im-res', sh);
+      try {
+        const { nuove, doppie, scartate } = misureDaCSV(await f.text(), S.d.misure);
+        if (!nuove.length) { res.innerHTML = `<div class="alert info">Nessuna misura nuova da importare${doppie ? ` (${doppie} già presenti o doppie)` : ''}.</div>`; return; }
+        res.innerHTML = `<div class="sec-t">${nuove.length} misure nuove</div><div class="card"><div class="list">${nuove.map(m => {
+          const c = REFS.classificaPressione(m.v.sis, m.v.dia, 'casa');
+          return `<div class="item"><div class="item-ico ${c.cls}"><span class="dot"></span></div><div class="item-body"><div class="item-t">${m.v.sis}/${m.v.dia}${m.v.fc ? ' · ' + m.v.fc + ' bpm' : ''}</div><div class="item-s">🏠 casa</div></div><div class="item-r">${fmtD(m.data)}<br>${fmtOra(m.data)}</div></div>`;
+        }).join('')}</div></div>
+        ${doppie ? `<p class="small muted">Saltate ${doppie} doppie.</p>` : ''}${scartate ? `<p class="small lv-check">Ignorate ${scartate} righe non valide.</p>` : ''}
+        <div class="f"><span class="lab">Dove sono state misurate?</span><div class="seg" id="im-ctx"><button data-v="casa">🏠 A casa</button><button data-v="ambulatorio">🏥 Dal medico</button></div></div>
+        <button class="btn" id="im-ok">Importa ${nuove.length} misure</button>`;
+        let ctx = 'casa'; segmento($('#im-ctx', sh), v => ctx = v, ctx);
+        $('#im-ok', sh).onclick = async () => {
+          for (const m of nuove) { m.contesto = ctx; m.p = S.pid; await DB.salva('misure', m); }
+          S.tipoMisura = 'pressione'; S.periodo = 'tutto';
+          await dopoSalvataggio(`${nuove.length} misure importate ✅`);
+        };
+      } catch (e) { res.innerHTML = `<div class="alert lv-warn">Non riesco a leggere il file: ${esc(e.message)}</div>`; }
+    };
+  });
+}
+
 async function esportaCSV() {
   const righe = [['Data', 'Ora', 'Tipo', 'Valore 1', 'Valore 2', 'Valore 3', 'Dove', 'Note']];
   const nf = x => x === undefined || x === '' ? '' : String(x).replace('.', ',');
@@ -1579,6 +1650,7 @@ const AZIONI = {
   info,
   backup: backupSheet,
   csv: esportaCSV,
+  importa: importaMisuratore,
   riepilogo: riepilogoSheet,
   sequenza: () => impostaSequenza(false, () => {}),
   andamentoVista,

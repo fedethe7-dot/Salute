@@ -1,6 +1,6 @@
 /* Cartella Salute — service worker
    Ad ogni aggiornamento dell'app aumentare CACHE, altrimenti il telefono vede la versione vecchia. */
-const CACHE = 'cartella-salute-v1';
+const CACHE = 'cartella-salute-v2';
 const FILE = ['./', 'index.html', 'style.css', 'refs.js', 'db.js', 'app.js', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 const ESTERNI = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net', 'tessdata.projectnaptha.com'];
 
