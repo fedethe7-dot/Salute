@@ -1,6 +1,6 @@
 /* Cartella Salute — service worker
    Ad ogni aggiornamento dell'app aumentare CACHE, altrimenti il telefono vede la versione vecchia. */
-const CACHE = 'cartella-salute-v3';
+const CACHE = 'cartella-salute-v5';
 const FILE = ['./', 'index.html', 'style.css', 'refs.js', 'db.js', 'app.js', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 const ESTERNI = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net', 'tessdata.projectnaptha.com'];
 
@@ -12,6 +12,22 @@ self.addEventListener('activate', e => {
 });
 self.addEventListener('fetch', e => {
   const u = new URL(e.request.url);
+  // File condivisi da altre app (Condividi → Cartella Salute): li parcheggio e apro l'app
+  if (e.request.method === 'POST' && u.pathname.endsWith('/condividi')) {
+    e.respondWith((async () => {
+      try {
+        const fd = await e.request.formData();
+        const c = await caches.open('condivisi');
+        let i = 0;
+        for (const f of fd.getAll('file')) {
+          if (!f || typeof f === 'string') continue;
+          await c.put(new Request(`condiviso-${Date.now()}-${i++}`), new Response(f, { headers: { 'X-Nome': encodeURIComponent(f.name || 'file'), 'X-Tipo': f.type || '' } }));
+        }
+      } catch (err) {}
+      return Response.redirect('./?condiviso=1', 303);
+    })());
+    return;
+  }
   if (e.request.method !== 'GET') return;
   // Librerie esterne (lettore PDF e OCR): una volta scaricate restano disponibili offline
   if (ESTERNI.includes(u.hostname)) {
@@ -26,7 +42,7 @@ self.addEventListener('fetch', e => {
   }
   if (u.origin !== location.origin) return;
   // App: prima la rete (così prendi gli aggiornamenti), se manca internet la copia salvata
-  e.respondWith(fetch(e.request).then(r => {
+  e.respondWith(fetch(e.request, { cache: 'no-cache' }).then(r => {
     if (r.ok) caches.open(CACHE).then(c => c.put(e.request, r.clone()));
     return r;
   }).catch(() => caches.match(e.request).then(r => r || caches.match('index.html'))));

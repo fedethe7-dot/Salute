@@ -2,7 +2,7 @@
    Cartella Salute — App
    ========================================================= */
 'use strict';
-const VERSIONE = '1.2.0';
+const VERSIONE = '1.3.0';
 /* FONTI e LIVELLI arrivano da refs.js */
 
 /* ---------- Utilità ---------- */
@@ -341,7 +341,8 @@ const val = (sh, id) => { const e = $('#' + id, sh); return e ? e.value.trim() :
 /* ---------- Allegati nei moduli ---------- */
 function gestoreAllegati(sh, esistenti = []) {
   const box = $('.files', sh);
-  const nuovi = [], rimossi = new Set();
+  const nuovi = [...(S.precarica || [])], rimossi = new Set();
+  S.precarica = null;
   const inp = document.createElement('input');
   inp.type = 'file'; inp.multiple = true; inp.accept = 'application/pdf,image/*'; inp.hidden = true;
   sh.appendChild(inp);
@@ -1577,14 +1578,14 @@ function misureDaCSV(testo, esistenti) {
   nuove.sort((a, b) => b.data.localeCompare(a.data));
   return { tipo, nuove, doppie, scartate };
 }
-function importaMisuratore() {
+function importaMisuratore(fileCondiviso) {
+  if (fileCondiviso && !(fileCondiviso instanceof File)) fileCondiviso = null;
   apriSheet(`<h2>📥 Importa da misuratore o bilancia</h2>
     <p class="muted small">Scegli il file CSV esportato dall'app del misuratore di pressione o della bilancia (es. RENPHO). L'app riconosce da sola il tipo e salta le misure doppie.</p>
-    <button class="btn" id="im-file">📂 Scegli il file CSV</button><input type="file" id="im-in" accept=".csv,text/csv,text/plain" hidden>
+    <button class="btn" id="im-file">📂 Scegli il file CSV</button><input type="file" id="im-in" accept=".csv,text/csv,text/comma-separated-values,text/plain,application/vnd.ms-excel,application/octet-stream,*/*" hidden>
     <div id="im-res"></div>`, sh => {
     $('#im-file', sh).onclick = () => $('#im-in', sh).click();
-    $('#im-in', sh).onchange = async ev => {
-      const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
+    const elabora = async f => {
       const res = $('#im-res', sh);
       try {
         const { tipo, nuove, doppie, scartate } = misureDaCSV(await f.text(), S.d.misure);
@@ -1609,6 +1610,8 @@ function importaMisuratore() {
         };
       } catch (e) { res.innerHTML = `<div class="alert lv-warn">Non riesco a leggere il file: ${esc(e.message)}</div>`; }
     };
+    $('#im-in', sh).onchange = ev => { const f = ev.target.files[0]; ev.target.value = ''; if (f) elabora(f); };
+    if (fileCondiviso) elabora(fileCondiviso);
   });
 }
 
@@ -1760,6 +1763,37 @@ async function entra() {
   await caricaDati();
   await render();
   DB.persistente();
+  gestisciCondivisi();
+}
+
+/* ---------- File condivisi da altre app (Condividi → Cartella Salute) ---------- */
+async function gestisciCondivisi() {
+  if (!/[?&]condiviso=1/.test(location.search)) return;
+  history.replaceState(null, '', location.pathname);
+  let files = [];
+  try {
+    const c = await caches.open('condivisi');
+    for (const k of await c.keys()) {
+      const r = await c.match(k); const b = await r.blob();
+      files.push(new File([b], decodeURIComponent(r.headers.get('X-Nome') || 'file'), { type: r.headers.get('X-Tipo') || b.type }));
+      await c.delete(k);
+    }
+  } catch (e) {}
+  if (!files.length) return toast('Non ho ricevuto nessun file');
+  const isCSV = f => /\.csv$/i.test(f.name) || /csv|comma-separated/i.test(f.type) || (f.type === 'text/plain' && /[;,]/.test(f.name + ','));
+  const csv = files.find(isCSV);
+  if (csv) return importaMisuratore(csv);
+  const docs = await Promise.all(files.filter(f => /^image\/|pdf/.test(f.type) || /\.pdf$/i.test(f.name)).map(preparaFile));
+  if (!docs.length) return toast('Tipo di file non supportato');
+  apriSheet(`<h2>📎 Dove lo salvo?</h2><p class="muted small">${docs.length === 1 ? esc(docs[0].nome) : docs.length + ' file'}</p>
+    <div class="grid2"><button class="card card-tap" style="text-align:left;margin:0" data-dove="esame"><div style="font-size:24px">🧪</div><div class="card-t">Referto / esame</div><div class="card-sub">Posso leggere i valori</div></button>
+    <button class="card card-tap" style="text-align:left;margin:0" data-dove="visita"><div style="font-size:24px">🩺</div><div class="card-t">Visita</div></button>
+    <button class="card card-tap" style="text-align:left;margin:0" data-dove="doc"><div style="font-size:24px">📄</div><div class="card-t">Documento</div></button></div>`, sh => {
+    $$('[data-dove]', sh).forEach(b => b.onclick = () => {
+      chiudiSheet(); S.precarica = docs;
+      setTimeout(() => ({ esame: () => formEsame(), visita: () => formVisita(), doc: () => formDoc() })[b.dataset.dove](), 60);
+    });
+  });
 }
 document.addEventListener('visibilitychange', async () => {
   if (document.hidden) { S.nascostaDa = Date.now(); return; }
@@ -1768,7 +1802,7 @@ document.addEventListener('visibilitychange', async () => {
 
 (async function avvio() {
   applicaTema(await DB.get('tema', 'turchese'));
-  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
   const lk = await DB.get('lock');
   if (!lk) {
     const prof = await DB.get('profilo:io');
